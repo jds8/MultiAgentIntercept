@@ -81,6 +81,13 @@ function truth!(red::RedAgent)
     Int64(r.state.position[1] <= 0);
 end
 
+# Step the RedAgent forward.
+# If it has reached [0,0], then return 1, o.w. 0
+function truth!(red::RedAgent)
+    step!(r);
+    Int64(r.state.position[1] <= 0);
+end
+
 # returns the number of agents that have gotten to [0,0] this round
 function truth!(redAgents::Array{RedAgent, 1})
     numPassed = 0;
@@ -95,73 +102,100 @@ function truth!(redAgents::Array{RedAgent, 1})
     end
     numPassed;
 end   
-mutable struct BlueAgent <: Agent
-    state::State
-    detectRadius::Float64
-    collisionRadius::Float64
-    id::Int64
-    threats::Array{RedAgent, 1}
+
+# updates a state based on velocity
+function updateState!(state::State, deltaT::Float64 = 1.0)
+    state.position[1] += deltaT * state.velocity[1];
+    state.position[2] += deltaT * state.velocity[2];
 end
 
-function BlueAgent(agentId::Int64, threats::Array{RedAgent, 1}, ybound::Float64 = 10.0)
-    pos = [0.0, rand(Uniform(-ybound, ybound), 1)[1]];
-    state = State(pos);
-    id = agentId;
-    BlueAgent(state, 3.0, 0.1, id, threats);
+# moves a blue agent according to its velocity
+function move!(blue::BlueAgent)
+    updateState!(blue.state);
 end
 
-function beginDetect(blue::BlueAgent)
-    blue.threats = [];
+function checkCollision!(blue::BlueAgent, redAgents::Array{RedAgent, 1})
+    for i in 1:length(redAgents)
+        red = redAgents[i];
+        # if the red agent is within the collision radius of the blue one
+        # remove the red agent and return 1
+        if distance(blue.state, red.state) <= blue.collisionRadius
+            deleteat!(redAgents, i);
+            return(1);
+        end
+    end
+    # if no red agents were in the collision radius, return 0
+    0;
 end
 
-function beginDetect(blueAgents::Array{BlueAgent, 1})
-    for blue in blueAgents
-        beginDetect(blue);
+# moves the blue agents
+function move!(blueAgents::Array{BlueAgent, 1}, redAgents::Array{RedAgent, 1})
+    # numCollided contains the number of BlueAgents that have
+    # collided with redAgents this round
+    numCollided = 0;
+    for i in 1:length(blueAgents)
+        trueInd = i - numCollided;
+        b = blueAgents[trueInd];
+        # update the state of the BlueAGent
+        move!(b)
+        # if the blue and red agents are within blue's 
+        # collision radius, annihilate them
+        numCollided += checkCollision!(b, redAgents);
+        deleteat!(blueAgents, trueInd);
     end
 end
 
-function detect!(blue::BlueAgent, ally::BlueAgent)
-    if distance(blue.state, ally.state) < blue.radius
-        
-    end
-end
-
-function detect!(blue::BlueAgent, threat::RedAgent)
+# detect noisy red agent within detection radius with probabiliy
+# that drops off with distance from blue agent
+function sense!(b::BlueAgent, r::RedAgent, sigma::Float64 = 1.0)
+    b.threatPositions = [];
     dist = distance(blue.state, threat.state);
     if dist <= blue.radius
         if rand(Uniform(0.0, 1.0), 1) < 1 - dist/blue.radius
-            append!(threats, threat)
+            append!(b.threatPositions, r.state.position + rand(Normal(0.0, sigma), 2));
         end
     end
 end
 
-
-# moves a blue agent according to its velocity
-function move!(blue::BlueAgent)
+function sense!(blueAgents::Array{BlueAgent, 1}, redAgents::Array{RedAgent, 1})
+    for b in blueAgents
+        for r in redAgents
+            sense!(b, r);
+        end
+    end
 end
 
-# moves the blue agents
-function move!(blueAgents::Array{BlueAgent, 1})
-    for i in 1:length(blueAgents)
-        move!(blueAgents[i])
+function communicate!(b1::BlueAgent, b2::BlueAgent)
+    if distance(b1.state, b2.state) < b1.detectRadius
+        setunion!(b1.threatPositions, b2.threatPositions);
+        setunion!(b2.threatPositions, b1.threatPositions);
+    end
+end
+
+function communicate!(blueAgents::Array{BlueAgent, 1})
+    for i in 1:length(blueAgents)-1
+        b1 = blueAgents[i];
+        for j in i+1:length(blueAgents)
+            b2 = blueAgents[j];
+            communicate!(b1, b2);
+        end
     end
 end
 
 function main(n::Int64 = 5)
     # Create redAgents
     redAgents = [RedAgent() for i in 1:n];
+    blueAgents = [BlueAgent(i, []) for i in 1:n];
     numPassed = 0;
     
     while !isempty(redAgents)
         numPassed += truth!(redAgents);
-        #decide()
-        move()
-        #sense()
-        #communicate()
-        #infer()
+        #decide();
+        move(blueAgents, redAgents);
+        sense(blueAgents, redAgents);
+        communicate(blueAgents);
+        #infer();
     end
     
     println(string(n-numPassed, " of ", n, " were successfully intercepted."));
 end
-
-main()
