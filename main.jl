@@ -76,14 +76,7 @@ end
 
 # Step the RedAgent forward.
 # If it has reached [0,0], then return 1, o.w. 0
-function truth!(red::RedAgent)
-    step!(r);
-    Int64(r.state.position[1] <= 0);
-end
-
-# Step the RedAgent forward.
-# If it has reached [0,0], then return 1, o.w. 0
-function truth!(red::RedAgent)
+function truth!(r::RedAgent)
     step!(r);
     Int64(r.state.position[1] <= 0);
 end
@@ -93,7 +86,7 @@ function truth!(redAgents::Array{RedAgent, 1})
     numPassed = 0;
     # update each RedAgent
     for i in 1:length(redAgents)
-        trueIndex = i-numPassed
+        trueIndex = i-numPassed;
         # check if it got to [0,0], if so, delete it
         if truth!(redAgents[trueIndex]) == 1
             deleteat!(redAgents, trueIndex);
@@ -109,23 +102,19 @@ function updateState!(state::State, deltaT::Float64 = 1.0)
     state.position[2] += deltaT * state.velocity[2];
 end
 
-# moves a blue agent according to its velocity
-function move!(blue::BlueAgent)
-    updateState!(blue.state);
-end
-
 function checkCollision!(blue::BlueAgent, redAgents::Array{RedAgent, 1})
     for i in 1:length(redAgents)
         red = redAgents[i];
         # if the red agent is within the collision radius of the blue one
         # remove the red agent and return 1
-        if distance(blue.state, red.state) <= blue.collisionRadius
+        dist = distance(blue.state, red.state);
+        if dist <= blue.collisionRadius
             deleteat!(redAgents, i);
-            return(1);
+            return(true);
         end
     end
     # if no red agents were in the collision radius, return 0
-    0;
+    false;
 end
 
 # moves the blue agents
@@ -137,11 +126,13 @@ function move!(blueAgents::Array{BlueAgent, 1}, redAgents::Array{RedAgent, 1})
         trueInd = i - numCollided;
         b = blueAgents[trueInd];
         # update the state of the BlueAGent
-        move!(b)
+        updateState!(b.state);
         # if the blue and red agents are within blue's 
-        # collision radius, annihilate them
-        numCollided += checkCollision!(b, redAgents);
-        deleteat!(blueAgents, trueInd);
+        # collision radius, annihilate the blue agent
+        if checkCollision!(b, redAgents);
+            numCollided += 1;
+            deleteat!(blueAgents, trueInd);
+        end
     end
 end
 
@@ -149,9 +140,9 @@ end
 # that drops off with distance from blue agent
 function sense!(b::BlueAgent, r::RedAgent, sigma::Float64 = 1.0)
     b.threatPositions = [];
-    dist = distance(blue.state, threat.state);
-    if dist <= blue.radius
-        if rand(Uniform(0.0, 1.0), 1) < 1 - dist/blue.radius
+    dist = distance(b.state, r.state);
+    if dist <= b.detectRadius
+        if rand(Uniform(0.0, 1.0), 1)[1] < 1 - dist/b.detectRadius
             append!(b.threatPositions, r.state.position + rand(Normal(0.0, sigma), 2));
         end
     end
@@ -167,8 +158,8 @@ end
 
 function communicate!(b1::BlueAgent, b2::BlueAgent)
     if distance(b1.state, b2.state) < b1.detectRadius
-        setunion!(b1.threatPositions, b2.threatPositions);
-        setunion!(b2.threatPositions, b1.threatPositions);
+        union!(b1.threatPositions, b2.threatPositions);
+        union!(b2.threatPositions, b1.threatPositions);
     end
 end
 
@@ -182,19 +173,20 @@ function communicate!(blueAgents::Array{BlueAgent, 1})
     end
 end
 
-function main(n::Int64 = 5)
+function main(n::Int64 = 1)
     # Create redAgents
     redAgents = [RedAgent() for i in 1:n];
-    blueAgents = [BlueAgent(i, []) for i in 1:n];
+    blueAgents = [BlueAgent(i, Array{Float64, 1}()) for i in 1:n];
     numPassed = 0;
     
     while !isempty(redAgents)
         numPassed += truth!(redAgents);
         #decide();
-        move(blueAgents, redAgents);
-        sense(blueAgents, redAgents);
-        communicate(blueAgents);
-        #infer();
+        move!(blueAgents, redAgents);
+        sense!(blueAgents, redAgents);
+        communicate!(blueAgents);
+        #infer!();
+        #broadcast!();
     end
     
     println(string(n-numPassed, " of ", n, " were successfully intercepted."));
