@@ -17,21 +17,6 @@ using PyPlot;
 
 Random.seed!(seed)
 
-seed = 1234
-Random.seed!(seed);
-# Create a polynomial from [0,0] to [x,y]
-function getTrajFromStartX(x, y, ybound::Float64=10.0)
-    # generate points of polynomial
-    deg = rand(2:4, 1)[1];
-    partitionLength = x / deg;
-    xvals = partitionLength*collect(0:deg);
-    unif = Uniform(-ybound,ybound);
-    yvals = append!([0.0], rand(unif, deg-1));
-    append!(yvals, y);
-    polyfit(xvals,yvals);
-end
-
-
 mutable struct State
     position::Array{Float64, 1}
     velocity::Array{Float64, 1}
@@ -46,6 +31,12 @@ function distance(state1::State, state2::State)
     state1.position - state2.position |> x->x.^2 |> sum |> sqrt
 end
 
+function phiBtwn(state1::State, state2::State)
+    angle = atan((state2.position[2] - state1.position[2]) / (state2.position[1] - state1.position[1]));
+    correction = Int64(state2.position[1] - state1.position[1] < 0)*pi;
+    angle + correction;
+end
+    
 abstract type Agent end
 
 mutable struct RedAgent <: Agent
@@ -72,6 +63,20 @@ function step!(red::RedAgent)
     newy = red.trajectory(newx);
     red.state.position[1] = newx;
     red.state.position[2] = newy;
+end
+
+mutable struct BlueAgent <: Agent
+    state::State
+    detectRadius::Float64
+    collisionRadius::Float64
+    id::Int64
+    threatOffsets::Array{Float64, 1}
+end
+
+function BlueAgent(agentId::Int64, threatOffsets::Array{Float64, 1}, ybound::Float64 = 10.0)
+    pos = [0.0, rand(Uniform(-ybound, ybound), 1)[1]];
+    state = State(pos);
+    BlueAgent(state, 5.0, 1.1, agentId, threatOffsets);
 end
 
 # Step the RedAgent forward.
@@ -136,14 +141,14 @@ function move!(blueAgents::Array{BlueAgent, 1}, redAgents::Array{RedAgent, 1})
     end
 end
 
-# detect noisy red agent within detection radius with probabiliy
+# detect red agent within detection radius with probabiliy
 # that drops off with distance from blue agent
 function sense!(b::BlueAgent, r::RedAgent, sigma::Float64 = 1.0)
     b.threatPositions = [];
     dist = distance(b.state, r.state);
     if dist <= b.detectRadius
         if rand(Uniform(0.0, 1.0), 1)[1] < 1 - dist/b.detectRadius
-            append!(b.threatPositions, r.state.position + rand(Normal(0.0, sigma), 2));
+            append!(b.threatPositions, r.state.position);
         end
     end
 end
