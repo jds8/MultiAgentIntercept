@@ -233,9 +233,9 @@ function decide!(b::BlueAgent, gain::Float64 = 0.8, deltaT::Float64 = 1.0)
     r = findClosestRed(b);
     if r != nothing
         # calculate gradient
-        gradHat = b.state.position + deltaT*b.state.velocity;
+        gradHat = b.state.position + deltaT*b.state.velocity - r.state.position;
         # update velocity
-        b.state.velocity -= gain*gradHat;
+        b.state.velocity -= gain/deltaT^2*gradHat;
     end
 end
 
@@ -254,7 +254,7 @@ function main(n::Int64 = 1)
     
     while !isempty(redAgents)
         numPassed += truth!(redAgents);
-        decide();
+        decide!(blueAgents);
         move!(blueAgents, redAgents);
         sense!(blueAgents, redAgents);
         communicate!(blueAgents);
