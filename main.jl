@@ -179,17 +179,24 @@ function communicate!(blueAgents::Array{BlueAgent, 1})
     end
 end
 
-function ekf!(b::BlueAgent)
-    #for z in b.threatRelativeStateHats
-        
-    #end
+function ekf!(z::Array{Float64, 1}, oldYhat::Array{Float64, 1}, oldP::Array{Float64, 2}, deltaT::Float64 = 1.0)
+    capPhi = transpose(reshape([1, 0, deltaT, 0, 0, 1, 0, deltaT, 0, 0, 1, 0, 0, 0, 0, 1], (4,4)));
+    Q = reshape([0.3, 0, 0, 0, 0, 0.3, 0, 0, 0, 0, 0.05, 0, 0, 0, 0, 0.05], (4,4));
+    # predict
+    yhatPredict = capPhi * oldYhat;
+    pPredict = capPhi * oldP * transpose(capPhi) + Q;
+    
+    # correct
+    eta = z
 end
 
 function infer!(b::BlueAgent)
-    ekf!(b);
+    for z in b.threatRelativeStateHats
+        (yhat, P) = ekf!(z, oldYhat, oldP);
+    end
 end
 
-function getOffsets!(b::BlueAgent, sigmaPhi::Float64 = 0.05, sigmaRho::Float64 = 0.1)
+function getRelativeStates!(b::BlueAgent, sigmaPhi::Float64 = 0.05, sigmaRho::Float64 = 0.1)
     b.threatRelativeStateHats = [];
     R = reshape([sigmaPhi, 0.0, 0.0, sigmaRho], (2,2));
     for r in b.threats
@@ -222,11 +229,11 @@ end
 
 # update velocity to move in direction of closest red agent
 # if b sees no red agents, then continue on current trajectory
-function decide!(b::BlueAgent, gain::Float64 = 0.8)
+function decide!(b::BlueAgent, gain::Float64 = 0.8, deltaT::Float64 = 1.0)
     r = findClosestRed(b);
     if r != nothing
         # calculate gradient
-        gradHat = b.state.position + b.state.velocity;
+        gradHat = b.state.position + deltaT*b.state.velocity;
         # update velocity
         b.state.velocity -= gain*gradHat;
     end
@@ -252,7 +259,6 @@ function main(n::Int64 = 1)
         sense!(blueAgents, redAgents);
         communicate!(blueAgents);
         infer!(blueAgents);
-        #broadcast!();
     end
     
     println(string(n-numPassed, " of ", n, " were successfully intercepted."));
