@@ -209,7 +209,7 @@ end
 
 function infer!(blueAgents::Array{BlueAgent, 1})
     for b in blueAgents
-        infer!(b);
+        getRelativeStates!(b);
     end
 end
 
