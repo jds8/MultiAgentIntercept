@@ -70,13 +70,14 @@ mutable struct BlueAgent <: Agent
     detectRadius::Float64
     collisionRadius::Float64
     id::Int64
-    threatOffsets::Array{Float64, 1}
+    threats::Array{RedAgent, 1}
+    threatStateHats::Array{State, 1}
 end
 
-function BlueAgent(agentId::Int64, threatOffsets::Array{Float64, 1}, ybound::Float64 = 10.0)
+function BlueAgent(agentId::Int64, ybound::Float64 = 10.0)
     pos = [0.0, rand(Uniform(-ybound, ybound), 1)[1]];
     state = State(pos);
-    BlueAgent(state, 5.0, 1.1, agentId, threatOffsets);
+    BlueAgent(state, 5.0, 1.1, agentId, Array{RedAgent, 1}(), Array{State, 1}());
 end
 
 # Step the RedAgent forward.
@@ -178,6 +179,66 @@ function communicate!(blueAgents::Array{BlueAgent, 1})
     end
 end
 
+function ekf!(b::BlueAgent)
+    #for z in b.threatRelativeStateHats
+        
+    #end
+end
+
+function infer!(b::BlueAgent)
+    ekf!(b);
+end
+
+function getOffsets!(b::BlueAgent, sigmaPhi::Float64 = 0.05, sigmaRho::Float64 = 0.1)
+    b.threatRelativeStateHats = [];
+    R = reshape([sigmaPhi, 0.0, 0.0, sigmaRho], (2,2));
+    for r in b.threats
+        phi = phiBtwn(b.state, r.state);
+        dist = distance(b.state, r.state);
+        append!(b.threatRelativeStateHats, [phi, dist] + rand(MvNormal([0.0, 0.0], R)));
+    end
+    infer!(b);
+end
+
+function infer!(blueAgents::Array{BlueAgent, 1})
+    for b in blueAgents
+        infer!(b);
+    end
+end
+
+# find the closest red agent if there is one
+function findClosestRed(b::BlueAgent)
+    minDist = Inf;
+    closestState = nothing;
+    for state in b.threatStateHats
+        dist = distance(b.state, state);
+        if dist < minDist
+            minDist = dist;
+            closestState = state;
+        end
+    end
+    state;
+end
+
+# update velocity to move in direction of closest red agent
+# if b sees no red agents, then continue on current trajectory
+function decide!(b::BlueAgent, gain::Float64 = 0.8)
+    r = findClosestRed(b);
+    if r != nothing
+        # calculate gradient
+        gradHat = b.state.position + b.state.velocity;
+        # update velocity
+        b.state.velocity -= gain*gradHat;
+    end
+end
+
+# calculate velocity update by minimizing loss
+function decide!(blueAgents::Array{BlueAgent, 1})
+   for b in blueAgents
+        decide!(b);
+    end
+end
+
 function main(n::Int64 = 1)
     # Create redAgents
     redAgents = [RedAgent() for i in 1:n];
@@ -186,11 +247,11 @@ function main(n::Int64 = 1)
     
     while !isempty(redAgents)
         numPassed += truth!(redAgents);
-        #decide();
+        decide();
         move!(blueAgents, redAgents);
         sense!(blueAgents, redAgents);
         communicate!(blueAgents);
-        #infer!();
+        infer!(blueAgents);
         #broadcast!();
     end
     
