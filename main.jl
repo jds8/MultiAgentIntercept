@@ -27,8 +27,12 @@ mutable struct State
     end
 end
 
+function distance(x::Array{Float64, 1}, y::Array{Float64, 1})
+    x - y |> x->x.^2 |> sum |> sqrt
+end
+
 function distance(state1::State, state2::State)
-    state1.position - state2.position |> x->x.^2 |> sum |> sqrt
+    distance(state1.position, state2.position);
 end
 
 function phiBtwn(state1::State, state2::State)
@@ -70,14 +74,20 @@ mutable struct BlueAgent <: Agent
     detectRadius::Float64
     collisionRadius::Float64
     id::Int64
-    threats::Array{RedAgent, 1}
+    threatStates::Array{State, 1}
+    threatRelativeStateHats::Array{State, 1}
     threatStateHats::Array{State, 1}
+    oldPs::Array{Array{Float64, 2}, 1}
 end
 
 function BlueAgent(agentId::Int64, ybound::Float64 = 10.0)
     pos = [0.0, rand(Uniform(-ybound, ybound), 1)[1]];
     state = State(pos);
-    BlueAgent(state, 5.0, 1.1, agentId, Array{RedAgent, 1}(), Array{State, 1}());
+    nullPos = [-1.0, -1.0];
+    nullState = State(nullPos);
+    nullP = zeros(4,4);
+    BlueAgent(state, 5.0, 1.1, agentId, Array{RedAgent, 1}(), 
+              Array{State, 1}(), Array{State, 1}(), nullState, nullP);
 end
 
 # Step the RedAgent forward.
@@ -145,11 +155,11 @@ end
 # detect red agent within detection radius with probabiliy
 # that drops off with distance from blue agent
 function sense!(b::BlueAgent, r::RedAgent, sigma::Float64 = 1.0)
-    b.threatPositions = [];
+    b.threatStates = [];
     dist = distance(b.state, r.state);
     if dist <= b.detectRadius
         if rand(Uniform(0.0, 1.0), 1)[1] < 1 - dist/b.detectRadius
-            append!(b.threatPositions, r.state.position);
+            append!(b., r.state);
         end
     end
 end
@@ -164,8 +174,8 @@ end
 
 function communicate!(b1::BlueAgent, b2::BlueAgent)
     if distance(b1.state, b2.state) < b1.detectRadius
-        union!(b1.threatPositions, b2.threatPositions);
-        union!(b2.threatPositions, b1.threatPositions);
+        union!(b1.threatStates, b2.threatStates);
+        union!(b2.threatStates, b1.threatStates);
     end
 end
 
@@ -179,37 +189,65 @@ function communicate!(blueAgents::Array{BlueAgent, 1})
     end
 end
 
-function ekf!(z::Array{Float64, 1}, oldYhat::Array{Float64, 1}, oldP::Array{Float64, 2}, deltaT::Float64 = 1.0)
+function ekf!(b::BlueAgent, z::Array{Float64, 1}, R::Array{Float64, 2}, deltaT::Float64 = 1.0,)
     capPhi = transpose(reshape([1, 0, deltaT, 0, 0, 1, 0, deltaT, 0, 0, 1, 0, 0, 0, 0, 1], (4,4)));
     Q = reshape([0.3, 0, 0, 0, 0, 0.3, 0, 0, 0, 0, 0.05, 0, 0, 0, 0, 0.05], (4,4));
     # predict
-    yhatPredict = capPhi * oldYhat;
-    pPredict = capPhi * oldP * transpose(capPhi) + Q;
+    yhatPred = capPhi * b.oldYhat;
+    pPred = capPhi * b.oldP * transpose(capPhi) + Q;
     
     # correct
-    eta = z
+    phiCorrect = phiBtwn(b.state, yhatPred);
+    distCorrect = distance(b.state, yhatPred);
+    eta = z - [phiCorrect, distCorrect];
+    
+    eastDiff = b.state.position[1] - yhatPred.state.position[1];
+    northDiff = b.state.position[2] - yhatPred.state.position[2];
+    H = reshape([(northDiff)/(distCorrect^2), -(eastDiff)/(distCorrect), 
+            -(eastDiff)/(distCorrect^2), -(northDiff)/(distCorrect), 0, 0, 0, 0], (2,4));
+    S = H*pPredict*transpose(H) + R;
+    
+    K = pPredict*transpose(H)*inv(S);
+    yhat = yhatPred + K*eta;
+    P = (Array{Float64, 2}(I, 4, 4) - K*H)*pPred;
+    
+    # store estimates
+    b.oldYhat = yhat;
+    b.oldP = P;
 end
 
-function infer!(b::BlueAgent)
+function infer!(b::BlueAgent, R::Array{Float64, 2})
     for z in b.threatRelativeStateHats
-        (yhat, P) = ekf!(z, oldYhat, oldP);
+        (yhat, P) = ekf!(b, z, R);
     end
 end
 
-function getRelativeStates!(b::BlueAgent, sigmaPhi::Float64 = 0.05, sigmaRho::Float64 = 0.1)
+function appendUnique!(threatRelStateHats::Array{Array{Float64, 2}, 1}, relStateHat::Array{Float64, 2}, 
+                       minDist::Float64 = 0.5)
+    # if relStateHat is "close" to a state in threatRelStateHats, then return w/o appending
+    for rsh in threatRelStateHats
+        if distance(rsh, relStateHat) < minDist
+            return;
+        end
+    end
+    # if relStateHat is not "close" to any state in threatRelStateHats, append
+    append!(threatRelStateHats, relStateHat);
+end
+
+function getRelativeStates!(b::BlueAgent, R::Array{Float64, 2})
     b.threatRelativeStateHats = [];
-    R = reshape([sigmaPhi, 0.0, 0.0, sigmaRho], (2,2));
-    for r in b.threats
+    for r in b.threatStates
         phi = phiBtwn(b.state, r.state);
         dist = distance(b.state, r.state);
-        append!(b.threatRelativeStateHats, [phi, dist] + rand(MvNormal([0.0, 0.0], R)));
+        appendUnique!(b.threatRelativeStateHats, [phi, dist] + rand(MvNormal([0.0, 0.0], R)));
     end
-    infer!(b);
 end
 
 function infer!(blueAgents::Array{BlueAgent, 1})
+    R = reshape([sigmaPhi, 0.0, 0.0, sigmaRho], (2,2));
     for b in blueAgents
-        getRelativeStates!(b);
+        getRelativeStates!(b, R);
+        infer!(b, R);
     end
 end
 
