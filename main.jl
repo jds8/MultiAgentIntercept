@@ -75,7 +75,7 @@ mutable struct BlueAgent <: Agent
     collisionRadius::Float64
     id::Int64
     threatStates::Array{State, 1}
-    threatRelativeStateHats::Array{State, 1}
+    threatRelativeStateHats::Array{Float64, 1}
     threatStateHats::Array{State, 1}
     oldPs::Array{Array{Float64, 2}, 1}
 end
