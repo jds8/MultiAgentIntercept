@@ -241,7 +241,7 @@ function getRelativeStates!(b::BlueAgent, R::Array{Float64, 2})
     end
 end
 
-function infer!(blueAgents::Array{BlueAgent, 1})
+function infer!(blueAgents::Array{BlueAgent, 1}, sigmaPhi::Float64 = 0.05, sigmaRho::Float64 = 0.1)
     R = reshape([sigmaPhi, 0.0, 0.0, sigmaRho], (2,2));
     for b in blueAgents
         getRelativeStates!(b, R);
@@ -250,7 +250,7 @@ function infer!(blueAgents::Array{BlueAgent, 1})
 end
 
 # find the closest red agent if there is one
-function findClosestRed(b::BlueAgent)
+function findClosestRedState(b::BlueAgent)
     minDist = Inf;
     closestState = nothing;
     for state in b.threatStateHats
@@ -266,10 +266,10 @@ end
 # update velocity to move in direction of closest red agent
 # if b sees no red agents, then continue on current trajectory
 function decide!(b::BlueAgent, gain::Float64 = 0.8, deltaT::Float64 = 1.0)
-    r = findClosestRed(b);
-    if r != nothing
+    rstate = findClosestRedState(b);
+    if rstate != nothing
         # calculate gradient
-        gradHat = b.state.position + deltaT*b.state.velocity - r.state.position;
+        gradHat = b.state.position + deltaT*b.state.velocity - rstate.position;
         # update velocity
         b.state.velocity -= gain/deltaT^2*gradHat;
     end
@@ -285,7 +285,7 @@ end
 function main(n::Int64 = 1)
     # Create redAgents
     redAgents = [RedAgent() for i in 1:n];
-    blueAgents = [BlueAgent(i, Array{Float64, 1}()) for i in 1:n];
+    blueAgents = [BlueAgent(i) for i in 1:n];
     numPassed = 0;
     
     while !isempty(redAgents)
