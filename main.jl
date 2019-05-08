@@ -159,7 +159,7 @@ function sense!(b::BlueAgent, r::RedAgent, sigma::Float64 = 1.0)
     dist = distance(b.state, r.state);
     if dist <= b.detectRadius
         if rand(Uniform(0.0, 1.0), 1)[1] < 1 - dist/b.detectRadius
-            append!(b., r.state);
+            append!(b.threatStates, r.state);
         end
     end
 end
