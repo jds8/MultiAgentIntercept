@@ -83,11 +83,9 @@ end
 function BlueAgent(agentId::Int64, ybound::Float64 = 10.0)
     pos = [0.0, rand(Uniform(-ybound, ybound), 1)[1]];
     state = State(pos);
-    nullPos = [-1.0, -1.0];
-    nullState = State(nullPos);
-    nullP = zeros(4,4);
-    BlueAgent(state, 5.0, 1.1, agentId, Array{RedAgent, 1}(), 
-              Array{State, 1}(), Array{State, 1}(), nullState, nullP);
+    nullP = [zeros(4,4)];
+    BlueAgent(state, 5.0, 1.1, agentId, Array{State, 1}(), 
+              Array{Float64, 1}(), Array{State, 1}(), nullP);
 end
 
 # Step the RedAgent forward.
