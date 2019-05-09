@@ -14,17 +14,41 @@ using NLsolve;
 Pkg.add("PyPlot");
 using PyPlot;
 
+Pkg.add("LinearAlgebra");
+using LinearAlgebra;
+
+seed = 1234
+Random.seed!(seed);
+# Create a polynomial from [0,0] to [x,y]
+function getTrajFromStartX(x::Float64, y::Float64, ybound::Float64=10.0)
+    # generate points of polynomial
+    deg = rand(2:4, 1)[1];
+    partitionLength = x / deg;
+    xvals = partitionLength*collect(0:deg);
+    unif = Uniform(-ybound,ybound);
+    yvals = append!([0.0], rand(unif, deg-1));
+    push!(yvals, y);
+    polyfit(xvals,yvals);
+end
 
 Random.seed!(seed)
 
 mutable struct State
     position::Array{Float64, 1}
     velocity::Array{Float64, 1}
-    function State(pos::Array{Float64, 1})
-        # Set velocity to be 1 unit in the East direction
-        vel = [1.0, 0.0];
+    function State(pos::Array{Float64, 1}, vel::Array{Float64, 1})
         new(pos, vel);
     end
+end
+
+function State(pos::Array{Float64, 1})
+    # Set velocity to be 1 unit in the East direction
+    vel = [1.0, 0.0];
+    State(pos, vel);
+end
+
+function asVec(state::State)
+    vcat(state.position, state.velocity);
 end
 
 function distance(x::Array{Float64, 1}, y::Array{Float64, 1})
@@ -35,12 +59,29 @@ function distance(state1::State, state2::State)
     distance(state1.position, state2.position);
 end
 
-function phiBtwn(state1::State, state2::State)
-    angle = atan((state2.position[2] - state1.position[2]) / (state2.position[1] - state1.position[1]));
-    correction = Int64(state2.position[1] - state1.position[1] < 0)*pi;
+function distance(state1::State, y::Array{Float64, 1})
+    distance(state1.position, y);
+end
+
+function phiBtwn(x::Array{Float64, 1}, y::Array{Float64, 1})
+    angle = atan((y[2] - x[2]) / (y[1] - x[1]));
+    correction = Int64(y[1] - x[1] < 0)*pi;
     angle + correction;
 end
-    
+
+function phiBtwn(state1::State, state2::State)
+    phiBtwn(state1.position, state2.position);
+end
+
+function phiBtwn(state1::State, y::Array{Float64, 1})
+    phiBtwn(state1.position, y);
+end
+
+function getStateFromRelative!(state::State, relOffset::Array{Float64, 1})
+    state.position[1] += relOffset[2]*cos(relOffset[1]);
+    state.position[2] += relOffset[2]*sin(relOffset[1]);
+end
+
 abstract type Agent end
 
 mutable struct RedAgent <: Agent
@@ -75,18 +116,22 @@ mutable struct BlueAgent <: Agent
     collisionRadius::Float64
     id::Int64
     threatStates::Array{State, 1}
-    threatRelativeStateHats::Array{Float64, 1}
-    threatStateHats::Array{State, 1}
-    oldPs::Array{Array{Float64, 2}, 1}
+    threatRelativeStateHat::Array{Float64, 1}
+    threatStateHat::State
+    oldP::Array{Float64, 2}
 end
 
 function BlueAgent(agentId::Int64, ybound::Float64 = 10.0)
     pos = [0.0, rand(Uniform(-ybound, ybound), 1)[1]];
     state = State(pos);
-    nullP = [zeros(4,4)];
+    nullP = zeros(4,4);
+    # the second to last argument is state arbitrarily
+    # threatStateHat will not be used until oldP != zeros(4,4)
     BlueAgent(state, 5.0, 1.1, agentId, Array{State, 1}(), 
-              Array{Float64, 1}(), Array{State, 1}(), nullP);
+              Array{Float64, 1}(), state, nullP);
 end
+
+BlueAgent(1)
 
 # Step the RedAgent forward.
 # If it has reached [0,0], then return 1, o.w. 0
@@ -157,7 +202,7 @@ function sense!(b::BlueAgent, r::RedAgent, sigma::Float64 = 1.0)
     dist = distance(b.state, r.state);
     if dist <= b.detectRadius
         if rand(Uniform(0.0, 1.0), 1)[1] < 1 - dist/b.detectRadius
-            append!(b.threatStates, r.state);
+            push!(b.threatStates, r.state);
         end
     end
 end
@@ -187,57 +232,89 @@ function communicate!(blueAgents::Array{BlueAgent, 1})
     end
 end
 
-function ekf!(b::BlueAgent, z::Array{Float64, 1}, R::Array{Float64, 2}, deltaT::Float64 = 1.0,)
+function getPredictions(b::BlueAgent, deltaT::Float64 = 1.0)
     capPhi = transpose(reshape([1, 0, deltaT, 0, 0, 1, 0, deltaT, 0, 0, 1, 0, 0, 0, 0, 1], (4,4)));
     Q = reshape([0.3, 0, 0, 0, 0, 0.3, 0, 0, 0, 0, 0.05, 0, 0, 0, 0, 0.05], (4,4));
     # predict
-    yhatPred = capPhi * b.oldYhat;
+    yhatPred = capPhi * asVec(b.threatStateHat);
     pPred = capPhi * b.oldP * transpose(capPhi) + Q;
     
     # correct
     phiCorrect = phiBtwn(b.state, yhatPred);
-    distCorrect = distance(b.state, yhatPred);
+    distCorrect = distance(b.state, [yhatPred[1], yhatPred[2]]);
+    z = b.threatRelativeStateHat;
     eta = z - [phiCorrect, distCorrect];
     
-    eastDiff = b.state.position[1] - yhatPred.state.position[1];
-    northDiff = b.state.position[2] - yhatPred.state.position[2];
+    (yhatPred, pPred, eta, distCorrect);
+end
+    
+function ekf!(b::BlueAgent, R::Array{Float64, 2}, deltaT::Float64 = 1.0)
+    (yhatPred, pPred, eta, distCorrect) = getPredictions(b, deltaT);
+    
+    eastDiff = b.state.position[1] - yhatPred[1];
+    northDiff = b.state.position[2] - yhatPred[2];
     H = reshape([(northDiff)/(distCorrect^2), -(eastDiff)/(distCorrect), 
             -(eastDiff)/(distCorrect^2), -(northDiff)/(distCorrect), 0, 0, 0, 0], (2,4));
-    S = H*pPredict*transpose(H) + R;
+    S = H*pPred*transpose(H) + R;
     
-    K = pPredict*transpose(H)*inv(S);
+    K = pPred*transpose(H)*inv(S);
     yhat = yhatPred + K*eta;
     P = (Array{Float64, 2}(I, 4, 4) - K*H)*pPred;
     
     # store estimates
-    b.oldYhat = yhat;
+    b.threatStateHat = State([yhat[1], yhat[2]], [yhat[3], yhat[4]]);
     b.oldP = P;
 end
 
-function infer!(b::BlueAgent, R::Array{Float64, 2})
-    for z in b.threatRelativeStateHats
-        (yhat, P) = ekf!(b, z, R);
-    end
+function setNewThreatStateHat!(b::BlueAgent)
+    getStateFromRelative!(b.threatStateHat, b.threatRelativeStateHat);
+    b.threatStateHat.velocity[1] = -b.state.velocity[1];
+    b.threatStateHat.velocity[2] = -b.state.velocity[2];
+    updateState!(b.threatStateHat);
 end
 
-function appendUnique!(threatRelStateHats::Array{Array{Float64, 2}, 1}, relStateHat::Array{Float64, 2}, 
-                       minDist::Float64 = 0.5)
-    # if relStateHat is "close" to a state in threatRelStateHats, then return w/o appending
-    for rsh in threatRelStateHats
-        if distance(rsh, relStateHat) < minDist
-            return;
+function infer!(b::BlueAgent, R::Array{Float64, 2}, etaThreshold::Float64 = 2.0)
+    # if we have a threatRelativeStateHat, then do an ekf update
+    if length(b.threatRelativeStateHat) > 0
+        # if the covariance is all zeros, then this is a new
+        # red agent target
+        if b.oldP != zeros(4,4)
+            # suppose that the red agent was moving with the opposite velocity as b
+            setNewThreatStateHat!(b);
+        else
+            (_, _, eta, _) = getPredictions(b);
+            # if the new state is too far from the old state, then set red agent
+            # as new threat
+            if norm(eta, 2) > etaThreshold
+                setNewThreatStateHat!(b);
+            end
         end
+        ekf!(b, R);
     end
-    # if relStateHat is not "close" to any state in threatRelStateHats, append
-    append!(threatRelStateHats, relStateHat);
 end
 
 function getRelativeStates!(b::BlueAgent, R::Array{Float64, 2})
-    b.threatRelativeStateHats = [];
-    for r in b.threatStates
-        phi = phiBtwn(b.state, r.state);
-        dist = distance(b.state, r.state);
-        appendUnique!(b.threatRelativeStateHats, [phi, dist] + rand(MvNormal([0.0, 0.0], R)));
+    b.threatRelativeStateHat = Array{Float64, 1}();
+    # if b is not aware of any threats, set covariance
+    # back to zeros and return
+    if length(b.threatStates) == 0
+        b.oldP = zeros(4,4);
+        return
+    end
+    # get all relative red agent states
+    relStates = Array{Array{Float64, 1}, 1}();
+    for rstate in b.threatStates
+        phi = phiBtwn(b.state, rstate);
+        dist = distance(b.state, rstate);
+        push!(relStates, [phi, dist] + rand(MvNormal([0.0, 0.0], R)));
+    end
+    # find closest red agent to b
+    minDist = Inf;
+    for relState in relStates
+        if relState[2] < minDist
+            minDist = relState[2];
+            b.threatRelativeStateHat = relState;
+        end
     end
 end
 
@@ -249,24 +326,10 @@ function infer!(blueAgents::Array{BlueAgent, 1}, sigmaPhi::Float64 = 0.05, sigma
     end
 end
 
-# find the closest red agent if there is one
-function findClosestRedState(b::BlueAgent)
-    minDist = Inf;
-    closestState = nothing;
-    for state in b.threatStateHats
-        dist = distance(b.state, state);
-        if dist < minDist
-            minDist = dist;
-            closestState = state;
-        end
-    end
-    state;
-end
-
 # update velocity to move in direction of closest red agent
 # if b sees no red agents, then continue on current trajectory
 function decide!(b::BlueAgent, gain::Float64 = 0.8, deltaT::Float64 = 1.0)
-    rstate = findClosestRedState(b);
+    rstate = b.threatStateHat
     if rstate != nothing
         # calculate gradient
         gradHat = b.state.position + deltaT*b.state.velocity - rstate.position;
