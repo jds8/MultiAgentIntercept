@@ -121,17 +121,17 @@ mutable struct BlueAgent <: Agent
     oldP::Array{Float64, 2}
 end
 
-function BlueAgent(agentId::Int64, ybound::Float64 = 10.0)
+function BlueAgent(agentId::Int64, detectRadius::Float64, ybound::Float64 = 10.0)
     pos = [0.0, rand(Uniform(-ybound, ybound), 1)[1]];
     state = State(pos);
     nullP = zeros(4,4);
     # the second to last argument is state arbitrarily
     # threatStateHat will not be used until oldP != zeros(4,4)
-    BlueAgent(state, 5.0, 1.1, agentId, Array{State, 1}(), 
+    BlueAgent(state, detectRadius, 0.1, agentId, Array{State, 1}(), 
               Array{Float64, 1}(), state, nullP);
 end
 
-BlueAgent(1)
+BlueAgent(agentId::Int64, ybound::Float64 = 10.0) = BlueAgent(agentId, 5.0, ybound);
 
 # Step the RedAgent forward.
 # If it has reached [0,0], then return 1, o.w. 0
@@ -197,7 +197,7 @@ end
 
 # detect red agent within detection radius with probabiliy
 # that drops off with distance from blue agent
-function sense!(b::BlueAgent, r::RedAgent, sigma::Float64 = 1.0)
+function sense!(b::BlueAgent, r::RedAgent)
     b.threatStates = [];
     dist = distance(b.state, r.state);
     if dist <= b.detectRadius
@@ -273,7 +273,7 @@ function setNewThreatStateHat!(b::BlueAgent)
     updateState!(b.threatStateHat);
 end
 
-function infer!(b::BlueAgent, R::Array{Float64, 2}, etaThreshold::Float64 = 2.0)
+function infer!(b::BlueAgent, R::Array{Float64, 2}, etaThreshold::Float64 = 1.1)
     # if we have a threatRelativeStateHat, then do an ekf update
     if length(b.threatRelativeStateHat) > 0
         # if the covariance is all zeros, then this is a new
@@ -328,8 +328,8 @@ end
 
 # update velocity to move in direction of closest red agent
 # if b sees no red agents, then continue on current trajectory
-function decide!(b::BlueAgent, gain::Float64 = 0.8, deltaT::Float64 = 1.0)
-    rstate = b.threatStateHat
+function decide!(b::BlueAgent, gain::Float64, deltaT::Float64 = 1.0)
+    rstate = b.threatStateHat;
     if rstate != nothing
         # calculate gradient
         gradHat = b.state.position + deltaT*b.state.velocity - rstate.position;
@@ -339,26 +339,52 @@ function decide!(b::BlueAgent, gain::Float64 = 0.8, deltaT::Float64 = 1.0)
 end
 
 # calculate velocity update by minimizing loss
-function decide!(blueAgents::Array{BlueAgent, 1})
+function decide!(blueAgents::Array{BlueAgent, 1}, gain::Float64 = 0.8)
    for b in blueAgents
-        decide!(b);
+        decide!(b, gain);
     end
 end
 
-function main(n::Int64 = 1)
+function main(n::Int64 = 1, gain::Float64 = 0.8, detectRadius::Float64 = 0.5, etaThreshold::Float64 = 1.1,
+              sigmaPhi::Float64 = 0.05, sigmaRho::Float64 = 0.1)
     # Create redAgents
     redAgents = [RedAgent() for i in 1:n];
-    blueAgents = [BlueAgent(i) for i in 1:n];
+    blueAgents = [BlueAgent(i, detectRadius) for i in 1:n];
     numPassed = 0;
     
     while !isempty(redAgents)
         numPassed += truth!(redAgents);
-        decide!(blueAgents);
+        decide!(blueAgents, gain);
         move!(blueAgents, redAgents);
         sense!(blueAgents, redAgents);
         communicate!(blueAgents);
-        infer!(blueAgents);
+        infer!(blueAgents, sigmaPhi, sigmaRho);
     end
     
-    println(string(n-numPassed, " of ", n, " were successfully intercepted."));
+    #println(string(n-numPassed, " of ", n, " were successfully intercepted."));
+    n-numPassed/n;
 end
+
+runs = 2000;
+gains = [0.6]#;, 0.7, 0.8];
+detectRadii = [2.0]#;, 5.0, 8.0];
+etaThresholds = [0.6, 1.0, 1.4];
+phiSigmas = [0.05];#, 0.1];
+rhoSigmas = [0.1];#, 0.2, 0.3];
+avgMatrix = zeros(length(gains), length(detectRadii), length(etaThresholds), length(phiSigmas), length(rhoSigmas));
+for (gainInd, gain) in enumerate(gains)
+    for (detectInd, detectRadius) in enumerate(detectRadii)
+        for (etaInd, eta) in enumerate(etaThresholds);
+            for (phiInd, phiSigma) in enumerate(phiSigmas)
+                for (rhoInd, rhoSigma) in enumerate(rhoSigmas)
+                    avg = 0;
+                    for i in 1:runs
+                        avg += main(5, gain, detectRadius, eta, phiSigma, rhoSigma)/runs;
+                    end
+                    avgMatrix[gainInd, detectInd, etaInd, phiInd, rhoInd] = avg;
+                end
+            end
+        end
+    end
+end
+println(avgMatrix);
